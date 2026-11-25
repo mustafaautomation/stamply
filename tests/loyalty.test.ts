@@ -5,6 +5,7 @@ import { hashPassword } from "../lib/password.ts"
 import { emptyDelta } from "../lib/types.ts"
 import {
   buildSeed,
+  compactDelta,
   dashboard,
   login,
   lookupCard,
@@ -16,6 +17,7 @@ import {
   signup,
 } from "../lib/loyalty.ts"
 import { walletProvider } from "../lib/wallet.ts"
+import { encodeDelta } from "../lib/cookies.ts"
 
 const now = Date.parse("2026-11-25T15:00:00.000Z")
 
@@ -106,4 +108,50 @@ test("mock wallet returns a preview and a placeholder pass", () => {
   const google = walletProvider("google").createPass(card.data)
   assert.equal(google.provider, "google")
   assert.match(google.preview, /svg/)
+})
+
+test("a busy counter keeps the cookie delta inside the header budget", () => {
+  const seed = buildSeed(now, hashPassword("stamply-demo"))
+  const delta = emptyDelta()
+  const created = signup(seed, delta, {
+    name: "Avery Cole",
+    email: "avery@e2e.stamply.test",
+    password: "correct-horse-stamp",
+    businessName: "Busy Roasters",
+    industry: "cafe",
+    stampGoal: 8,
+    rewardText: "Free espresso",
+    primaryColor: "#24312B",
+    accentColor: "#C23B22",
+    origin: "http://127.0.0.1:43123",
+  })
+  assert.equal(created.ok, true)
+  if (!created.ok) return
+  const actor = created.data.actor
+  let at = now
+  const codes: string[] = []
+  for (let index = 0; index < 20; index += 1) {
+    const card = lookupCard(seed, delta, actor, { contact: `guest${index}@e2e.stamply.test`, name: `Guest ${index}`, origin: "http://x" }, at)
+    assert.equal(card.ok, true)
+    if (!card.ok) return
+    codes.push(card.data.code)
+    for (let stamp = 0; stamp < 8; stamp += 1) {
+      at += 60_000
+      assert.equal(punchCard(seed, delta, actor, card.data.code, true, at).ok, true)
+    }
+    assert.equal(redeemCard(seed, delta, actor, card.data.code, false, "staff", at).ok, true)
+  }
+  const size = (db: typeof delta) => encodeDelta(db).length
+  assert.ok(size(delta) > 10_000, "fixture should overflow the budget before compaction")
+  const compacted = compactDelta(delta, size, 10_000, at)
+  assert.ok(size(compacted) <= 10_000)
+  assert.equal(compacted.tenants.length, 1)
+  assert.equal(compacted.users.length, 1)
+  assert.equal(compacted.cards.length, 20)
+  for (const code of codes) assert.equal(merchantCard(seed, compacted, actor, code).ok, true)
+  const home = dashboard(seed, compacted, actor, at)
+  assert.equal(home.ok, true)
+  if (!home.ok) return
+  assert.equal(home.data.rewardsRedeemed, 20)
+  assert.ok(home.data.punchesToday > 0)
 })

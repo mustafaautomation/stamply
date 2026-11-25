@@ -18,3 +18,15 @@ Not in this copy: files Cursor's template created and the agent never changed (e
 - Regenerated README screenshots (`docs/screenshots/*.png`) from the running app with `node scripts/screenshots.mjs`.
 
 Verified locally: `npm run typecheck` OK, `npm run lint` 0 errors (6 warnings), `npm test` 3/3 passed, `npm run build` OK, `npx playwright test` 5/5 passed.
+
+## Review of the reconstructed `lib/loyalty.ts` (25 Nov 2026, Claude Code)
+
+Re-checked every export against `lib/handlers.ts`, `lib/request-store.ts`, the pages, `tests/loyalty.test.ts`, the E2E spec, the README and the Cursor thread summary (LUMEN-MAYA 8/8 with redeem refused, Nina 6/6, Andre 9/10, punch by phone/email/code/QR, 90 s confirm, showcase read-only, signup creates a browser-local program, seven seeded logins). Error codes and messages match the Supabase functions `punch_card`, `redeem_card`, `lookup_card` and `get_public_card` line for line; seed users match `scripts/seed-supabase.mjs`.
+
+Fixed (missing piece):
+- The browser-only program lives in a signed cookie delta that grew ~110 bytes per punch with no bound. After roughly 120 punches the Cookie header passed Node's 16 KB request-header limit (431 errors), and past 8 x 3200 chars the chunks were cut, the signature failed and the program vanished. New `compactDelta()` keeps users, tenants, customers and cards, drops punches older than the 8-week retention window and trims punches/activity/outbox newest-first until the encoded delta fits 10,000 chars; `request-store` runs it before writing the cookies. Unit test added (20 cards, 160 punches, 20 redemptions stays within budget and every card still resolves).
+- `playwright.config.ts` reads an optional `E2E_PORT` (default 43123).
+
+Still inferred, not copied: seed customer names other than Maya/Nina/Andre, salon/gym colors, the `PREFIX-XXXXXX` code format for new mock cards (the SQL path uses 8 hex chars), the retention formula, and the mock-only plan card limit check in `lookupCard`. In mock mode a heavy counter keeps the newest history only (dashboard totals for rewards come from the cards, so they stay exact).
+
+Verified: typecheck OK, lint 0 errors (6 existing `<img>` warnings), `npm test` 4/4, `npm run build` OK, Playwright 5/5.

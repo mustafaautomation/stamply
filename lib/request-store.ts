@@ -6,6 +6,7 @@ import {
   SESSION_COOKIE,
   SESSION_MAX_AGE,
   deltaCookiePairs,
+  encodeDelta,
   isSecureRequest,
   issueSession,
   parseCookieHeader,
@@ -13,7 +14,7 @@ import {
   readSession,
   serializeCookie,
 } from "@/lib/cookies"
-import { actorById, getSeed } from "@/lib/loyalty"
+import { actorById, compactDelta, getSeed } from "@/lib/loyalty"
 import type { Actor, Db, Result } from "@/lib/types"
 
 type SessionWrite = { kind: "set"; userId: string } | { kind: "clear" }
@@ -27,6 +28,10 @@ type Context = {
 }
 
 const storage = new AsyncLocalStorage<Context>()
+
+// Encoded delta budget in characters. Keeps the whole Cookie header well under
+// Node's 16 KB request-header limit (session cookie and others ride along).
+const DELTA_BUDGET = 10_000
 
 function mustContext() {
   const ctx = storage.getStore()
@@ -110,7 +115,8 @@ function stripWrote(data: unknown) {
 function cookieHeaders(ctx: Context) {
   const headers: string[] = []
   if (ctx.dirty) {
-    for (const cookie of deltaCookiePairs(ctx.delta)) {
+    const delta = compactDelta(ctx.delta, (db) => encodeDelta(db).length, DELTA_BUDGET)
+    for (const cookie of deltaCookiePairs(delta)) {
       headers.push(serializeCookie(cookie.name, cookie.value, { maxAge: cookie.maxAge, secure: ctx.secure }))
     }
   }

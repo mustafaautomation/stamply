@@ -940,6 +940,43 @@ export function setPlan(
 }
 
 // ---------------------------------------------------------------------------
+// Cookie budget
+// ---------------------------------------------------------------------------
+
+/**
+ * The browser delta travels in the Cookie header. Node rejects request headers
+ * over 16 KB, and anything past the chunk limit fails the signature and wipes
+ * the program. Users, tenants, customers and cards are always kept; history
+ * (punches, activity, outbox) is trimmed, newest first, until `size(delta)`
+ * fits `budget`. Punches older than the retention chart are dropped first.
+ */
+export function compactDelta(
+  delta: Db,
+  size: (db: Db) => number,
+  budget: number,
+  now: number = Date.now(),
+): Db {
+  if (size(delta) <= budget) return delta
+  const newest = <T extends { createdAt: string }>(list: T[], keep: number) =>
+    [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, Math.max(0, keep))
+  const horizon = startOfUtcDay(now) + DAY - RETENTION_WEEKS * WEEK
+  delta.punches = delta.punches.filter((punch) => Date.parse(punch.createdAt) >= horizon)
+  let punches = Math.min(delta.punches.length, 120)
+  let activity = Math.min(delta.activity.length, 40)
+  let emails = Math.min(delta.emails.length, 10)
+  const all = { punches: delta.punches, activity: delta.activity, emails: delta.emails }
+  for (;;) {
+    delta.punches = newest(all.punches, punches)
+    delta.activity = newest(all.activity, activity)
+    delta.emails = newest(all.emails, emails)
+    if (size(delta) <= budget || (punches === 0 && activity === 0 && emails === 0)) return delta
+    punches = Math.floor(punches / 2)
+    activity = Math.floor(activity / 2)
+    emails = Math.floor(emails / 2)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Super admin
 // ---------------------------------------------------------------------------
 
